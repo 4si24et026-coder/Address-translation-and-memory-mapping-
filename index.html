@@ -1,0 +1,1595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARM Memory Simulator — C Code → MMU Live Translation</title>
+<meta name="description" content="Interactive ARM C memory simulator with TLB, page tables, PTE decoder, and step-by-step visualization for computer architecture education.">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+--bg:#0D1117;--bg2:#161B22;--bg3:#1C2128;--bg4:#21262D;--brd:#30363D;--brd2:#484F58;
+--tx:#E6EDF3;--tx2:#8B949E;--tx3:#6E7681;--tx4:#484F58;
+--blue:#58A6FF;--green:#3FB950;--amber:#D29922;--red:#F85149;
+--purple:#BC8CFF;--stack:#79C0FF;--code:#56D364;--data:#FFA657;--kernel:#FF7B72;
+--rodata:#E3B341;--bss:#D2A679;
+--font:'JetBrains Mono','IBM Plex Mono','Fira Code',monospace;
+--r:6px;--r2:10px;--r3:14px;--tr:0.2s ease;
+}
+[data-theme="light"]{
+--bg:#F6F8FA;--bg2:#FFFFFF;--bg3:#F0F2F5;--bg4:#E8EBF0;--brd:#D0D7DE;--brd2:#AFB8C1;
+--tx:#1F2328;--tx2:#57606A;--tx3:#6E7781;--tx4:#8C959F;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--tx);font-size:15px;display:flex;flex-direction:column}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--tx3)}
+
+/* ── Header ─────────────────────────────────────────────── */
+.header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--bg2);border-bottom:1px solid var(--brd);flex-shrink:0;height:54px}
+.header-left{display:flex;align-items:center;gap:14px}
+.header h1{font-size:22px;font-weight:700;background:linear-gradient(135deg,var(--blue),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-0.3px}
+.header .subtitle{font-size:14px;color:var(--tx3);letter-spacing:0.5px}
+.header-right{display:flex;align-items:center;gap:8px}
+.theme-toggle{background:var(--bg3);border:1px solid var(--brd);border-radius:12px;width:40px;height:22px;cursor:pointer;position:relative;transition:var(--tr)}
+.theme-toggle::after{content:'';position:absolute;top:3px;left:3px;width:14px;height:14px;background:var(--tx2);border-radius:50%;transition:var(--tr)}
+.theme-toggle.light::after{left:21px;background:var(--amber)}
+.kbd-hint{font-size:12px;color:var(--tx4);padding:4px 10px;border:1px solid var(--brd);border-radius:4px;cursor:help}
+
+/* ── Main Layout ────────────────────────────────────────── */
+.main{display:flex;flex:1;overflow:hidden}
+.panel{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--brd)}
+.panel:last-child{border-right:none}
+.panel-left{width:30%;min-width:280px}
+.panel-center{width:40%;min-width:320px}
+.panel-right{width:30%;min-width:280px;border-right:none}
+.panel-header{padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--brd);font-size:14px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.panel-header .dot{width:10px;height:10px;border-radius:50%;margin-right:8px;display:inline-block}
+.panel-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:0;position:relative}
+
+/* ── Code Editor ────────────────────────────────────────── */
+.editor-wrap{display:flex;flex:1;overflow:hidden;position:relative}
+.line-nums{width:44px;padding:10px 6px 10px 10px;background:var(--bg);text-align:right;color:var(--tx4);font-size:15px;line-height:24px;user-select:none;overflow:hidden;flex-shrink:0;border-right:1px solid var(--brd)}
+.line-nums .active-ln{color:var(--blue);font-weight:700}
+.code-area{flex:1;padding:10px 14px;background:var(--bg);color:var(--tx);font-family:var(--font);font-size:15px;line-height:24px;border:none;outline:none;resize:none;white-space:pre;tab-size:4;overflow:auto}
+.code-area::selection{background:rgba(88,166,255,0.2)}
+.editor-controls{display:flex;gap:8px;padding:10px 12px;background:var(--bg2);border-top:1px solid var(--brd);flex-shrink:0;flex-wrap:wrap}
+.btn{padding:10px 18px;border:1px solid var(--brd);border-radius:var(--r);background:var(--bg3);color:var(--tx2);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:var(--tr);text-transform:uppercase;letter-spacing:0.5px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:var(--brd2);color:var(--tx);background:var(--bg4)}
+.btn-primary{background:rgba(88,166,255,0.1);border-color:rgba(88,166,255,0.3);color:var(--blue)}
+.btn-primary:hover{background:rgba(88,166,255,0.2);border-color:var(--blue)}
+.btn-green{background:rgba(63,185,80,0.1);border-color:rgba(63,185,80,0.3);color:var(--green)}
+.btn-green:hover{background:rgba(63,185,80,0.2);border-color:var(--green)}
+.btn-red{background:rgba(248,81,73,0.08);border-color:rgba(248,81,73,0.2);color:var(--red)}
+.btn-red:hover{background:rgba(248,81,73,0.15);border-color:var(--red)}
+.btn-sm{padding:7px 12px;font-size:12px}
+.program-select{padding:6px 10px;background:var(--bg3);border:1px solid var(--brd);border-radius:var(--r);color:var(--tx2);font-family:var(--font);font-size:14px;cursor:pointer;outline:none}
+.program-select option{background:var(--bg2);color:var(--tx)}
+
+/* ── Memory Map ─────────────────────────────────────────── */
+.memmap-container{width:100%;height:100%;position:relative}
+.memmap-svg{width:100%;height:100%}
+.what-happened{padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--brd);font-size:14px;min-height:46px;display:flex;align-items:center;gap:10px;flex-shrink:0}
+.what-happened .wh-dot{width:10px;height:10px;border-radius:50%;background:var(--green);flex-shrink:0;animation:pulse-dot 2s infinite}
+.what-happened .wh-text{color:var(--tx2);line-height:1.5}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:0.3}}
+.legend-bar{display:flex;flex-wrap:wrap;gap:14px;padding:8px 14px;background:var(--bg2);border-top:1px solid var(--brd);flex-shrink:0}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--tx3)}
+.legend-swatch{width:14px;height:14px;border-radius:3px}
+
+/* ── MMU Panel ──────────────────────────────────────────── */
+.mmu-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:10px;background:var(--bg2);border-bottom:1px solid var(--brd);flex-shrink:0}
+.mmu-stat{text-align:center;padding:6px}
+.mmu-stat .sv{font-size:22px;font-weight:700}
+.mmu-stat .sl{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.8px;margin-top:2px}
+.mmu-section{padding:10px 12px;border-bottom:1px solid var(--brd)}
+.mmu-section-title{font-size:14px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.mmu-section-title .ico{font-size:16px}
+
+/* TLB Table */
+.tlb-table{width:100%;border-collapse:collapse;font-size:13px}
+.tlb-table th{padding:6px 8px;text-align:center;font-weight:600;color:var(--tx4);border-bottom:1px solid var(--brd);font-size:12px;text-transform:uppercase;letter-spacing:0.5px}
+.tlb-table td{padding:5px 8px;text-align:center;color:var(--tx2);border-bottom:1px solid rgba(48,54,61,0.5);transition:all 0.4s ease}
+.tlb-table tr.empty td{color:var(--tx4);font-style:italic}
+.tlb-table tr.hit td{background:rgba(63,185,80,0.08);color:var(--green)}
+.tlb-table tr.miss td{background:rgba(210,153,34,0.08);color:var(--amber)}
+.tlb-table tr.fill-flash td{animation:tlb-fill 0.6s ease}
+.tlb-valid{display:inline-block;width:9px;height:9px;border-radius:50%}
+.tlb-valid.on{background:var(--green);box-shadow:0 0 4px var(--green)}
+.tlb-valid.off{background:var(--tx4)}
+@keyframes tlb-fill{0%{background:rgba(63,185,80,0.3)}100%{background:rgba(63,185,80,0.06)}}
+
+/* Page Walk */
+.walk-display{font-size:14px;line-height:1.9}
+.walk-step{padding:2px 0;opacity:0;transform:translateX(-8px);transition:all 0.3s ease}
+.walk-step.visible{opacity:1;transform:translateX(0)}
+.walk-step .ws-label{color:var(--tx4);font-weight:600}
+.walk-step .ws-addr{color:var(--blue)}
+.walk-step .ws-val{color:var(--green)}
+.walk-step .ws-type{color:var(--amber)}
+.walk-va{margin-bottom:6px}
+.walk-va .va-bits{display:flex;gap:2px;margin-top:4px}
+.va-bit-group{display:flex;flex-direction:column;align-items:center;gap:2px}
+.va-bit-group .bits{padding:5px 12px;border-radius:4px;font-weight:600;font-size:14px}
+.va-bit-group .blabel{font-size:11px;color:var(--tx4)}
+
+/* PTE Decoder */
+.pte-decoder{margin-top:6px}
+.pte-bits{display:flex;gap:1px;margin:6px 0}
+.pte-bit{display:flex;flex-direction:column;align-items:center;gap:1px;cursor:help;transition:var(--tr)}
+.pte-bit:hover{transform:scale(1.1)}
+.pte-bit .bv{padding:3px 5px;border-radius:3px;font-size:12px;font-weight:600;min-width:20px;text-align:center}
+.pte-bit .bn{font-size:10px;color:var(--tx4)}
+.pte-decoded{font-size:13px;line-height:1.9;color:var(--tx2);margin-top:6px}
+.pte-decoded span{padding:2px 6px;border-radius:3px;font-weight:500}
+
+/* Permissions Table */
+.perm-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+.perm-table th{padding:5px 6px;text-align:left;color:var(--tx4);border-bottom:1px solid var(--brd);font-weight:600}
+.perm-table td{padding:4px 6px;color:var(--tx2);border-bottom:1px solid rgba(48,54,61,0.3)}
+.perm-table .seg-color{width:12px;height:12px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:middle}
+
+/* PT Cost */
+.pt-cost{font-size:13px;color:var(--tx3);line-height:1.8;margin-top:6px}
+.pt-cost .cv{color:var(--blue);font-weight:600}
+
+/* ── Bottom Log ─────────────────────────────────────────── */
+.bottom-panel{height:180px;min-height:120px;border-top:1px solid var(--brd);display:flex;flex-direction:column;flex-shrink:0;background:var(--bg)}
+.bottom-panel .panel-header{display:flex;justify-content:space-between}
+.log-body{flex:1;overflow-y:auto;padding:6px 14px;font-size:14px;line-height:1.8}
+.log-entry{white-space:pre;animation:log-in 0.3s ease}
+.log-entry.highlight{background:rgba(88,166,255,0.06);border-radius:2px}
+@keyframes log-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.log-t{color:var(--tx4)}
+.log-parse{color:var(--tx3)}
+.log-segment{color:var(--tx3)}
+.log-va{color:var(--blue)}
+.log-tlb-miss{color:var(--amber)}
+.log-tlb-fill{color:var(--green)}
+.log-tlb-hit{color:rgba(63,185,80,0.7)}
+.log-walk{color:#39C5CF}
+.log-pa{color:#2EA98D}
+.log-stack{color:var(--stack)}
+.log-malloc{color:var(--purple)}
+.log-free{color:rgba(188,140,255,0.6)}
+.log-write{color:var(--tx)}
+.log-read{color:var(--tx2)}
+.log-fault{color:var(--red);font-weight:600}
+.log-func{color:var(--code)}
+
+/* Tooltip */
+.tooltip{position:fixed;background:var(--bg3);border:1px solid var(--brd2);border-radius:var(--r);padding:12px 16px;font-size:14px;color:var(--tx);max-width:360px;z-index:1000;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,0.4);line-height:1.7;opacity:0;transition:opacity 0.15s}
+.tooltip.show{opacity:1}
+.tooltip .tt-title{font-weight:600;color:var(--blue);margin-bottom:2px}
+.tooltip .tt-row{display:flex;justify-content:space-between;gap:12px}
+.tooltip .tt-label{color:var(--tx3)}
+.tooltip .tt-val{color:var(--tx);font-weight:500}
+
+/* Animations */
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(4px)}60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
+@keyframes seg-in{from{opacity:0;transform:translateX(-15px)}to{opacity:1;transform:translateX(0)}}
+@keyframes pin-in{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+@keyframes pulse-amber{0%,100%{box-shadow:none}50%{box-shadow:0 0 8px var(--amber)}}
+.shake{animation:shake 0.3s ease}
+</style>
+</head>
+<body>
+<!-- ═══ HEADER ═══ -->
+<header class="header">
+  <div class="header-left">
+    <h1>ARM Memory Simulator</h1>
+    <span class="subtitle">C Code → MMU Live Translation Engine</span>
+  </div>
+  <div class="header-right">
+    <span class="kbd-hint" title="Space/→: Step, S: Sim All, R: Reset, 1-5: Programs">⌨ Shortcuts</span>
+    <div class="theme-toggle" id="themeToggle" title="Toggle theme"></div>
+  </div>
+</header>
+
+<!-- ═══ MAIN THREE-PANEL LAYOUT ═══ -->
+<div class="main">
+  <!-- ── LEFT: C Code Editor ── -->
+  <div class="panel panel-left">
+    <div class="panel-header">
+      <span><span class="dot" style="background:var(--code)"></span>C Source Editor</span>
+      <select class="program-select" id="programSelect">
+        <option value="0">1 — Basic Allocation</option>
+        <option value="1">2 — Stack Frames</option>
+        <option value="2">3 — Linked List</option>
+        <option value="3">4 — Buffer & Strings</option>
+        <option value="4">5 — Memory Fault Demo</option>
+      </select>
+    </div>
+    <div class="editor-wrap">
+      <div class="line-nums" id="lineNums"></div>
+      <textarea class="code-area" id="codeArea" spellcheck="false"></textarea>
+    </div>
+    <div class="editor-controls">
+      <button class="btn btn-primary" id="btnSimAll" onclick="Simulator.run()">▶ Simulate All</button>
+      <button class="btn btn-green" id="btnStep" onclick="Simulator.step()">⏭ Step →</button>
+      <button class="btn btn-red" id="btnReset" onclick="Simulator.reset()">↺ Reset</button>
+      <button class="btn btn-sm" onclick="Logger.copyTrace()" title="Copy trace log">📋 Copy</button>
+    </div>
+  </div>
+
+  <!-- ── CENTER: Memory Map Visualizer ── -->
+  <div class="panel panel-center">
+    <div class="panel-header">
+      <span><span class="dot" style="background:var(--blue)"></span>Memory Map — 32-bit Virtual Address Space</span>
+    </div>
+    <div class="what-happened" id="whatHappened">
+      <span class="wh-dot"></span>
+      <span class="wh-text" id="whText">Load a program and click Simulate or Step to begin.</span>
+    </div>
+    <div class="panel-body">
+      <div class="memmap-container" id="memmapContainer">
+        <svg class="memmap-svg" id="memmapSvg"></svg>
+      </div>
+    </div>
+    <div class="legend-bar">
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--code)"></span>.text</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--rodata)"></span>.rodata</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--data)"></span>.data</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--bss)"></span>.bss</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--purple)"></span>heap</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--stack)"></span>stack</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--kernel)"></span>kernel</div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: ARM MMU Engine ── -->
+  <div class="panel panel-right">
+    <div class="panel-header">
+      <span><span class="dot" style="background:var(--amber)"></span>ARM MMU Engine</span>
+    </div>
+    <div class="mmu-stats" id="mmuStats">
+      <div class="mmu-stat"><div class="sv" style="color:var(--blue)" id="statVars">0</div><div class="sl">Variables</div></div>
+      <div class="mmu-stat"><div class="sv" style="color:var(--green)" id="statTLB">0/32</div><div class="sl">TLB Entries</div></div>
+      <div class="mmu-stat"><div class="sv" style="color:var(--amber)" id="statHitRate">—</div><div class="sl">Hit Rate</div></div>
+    </div>
+    <div class="panel-body">
+      <!-- TLB -->
+      <div class="mmu-section">
+        <div class="mmu-section-title"><span class="ico">⚡</span> TLB Cache (32-entry fully associative)</div>
+        <div style="max-height:180px;overflow-y:auto">
+          <table class="tlb-table">
+            <thead><tr><th>#</th><th>V</th><th>VA Tag</th><th>PA Base</th><th>AP</th><th>C</th><th>B</th></tr></thead>
+            <tbody id="tlbBody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:8px;font-size:13px;color:var(--tx3)">
+          <span>Hits: <b style="color:var(--green)" id="tlbHits">0</b></span>
+          <span>Misses: <b style="color:var(--amber)" id="tlbMisses">0</b></span>
+          <span>Rate: <b style="color:var(--tx2)" id="tlbRate">—</b></span>
+        </div>
+      </div>
+      <!-- Page Table Walk -->
+      <div class="mmu-section">
+        <div class="mmu-section-title"><span class="ico">🔍</span> Page Table Walk</div>
+        <div class="walk-display" id="walkDisplay">
+          <div style="color:var(--tx4);font-style:italic;font-size:14px">Waiting for TLB miss...</div>
+        </div>
+      </div>
+      <!-- PTE Decoder -->
+      <div class="mmu-section">
+        <div class="mmu-section-title"><span class="ico">🔧</span> PTE Bit-Field Decoder</div>
+        <div class="pte-decoder" id="pteDecoder">
+          <div style="color:var(--tx4);font-style:italic;font-size:14px">No PTE selected</div>
+        </div>
+      </div>
+      <!-- Segment Permissions -->
+      <div class="mmu-section">
+        <div class="mmu-section-title"><span class="ico">🛡</span> Segment Permissions</div>
+        <table class="perm-table">
+          <thead><tr><th>Segment</th><th>VA Range</th><th>AP</th><th>Access</th></tr></thead>
+          <tbody>
+            <tr><td><span class="seg-color" style="background:var(--code)"></span>.text</td><td>0x00008000</td><td>01</td><td>Kern RW / User RO</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--rodata)"></span>.rodata</td><td>0x00010000</td><td>01</td><td>Kern RW / User RO</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--data)"></span>.data</td><td>0x00011000</td><td>11</td><td>Full RW</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--bss)"></span>.bss</td><td>0x00012000</td><td>11</td><td>Full RW</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--purple)"></span>heap</td><td>0xB0000000</td><td>11</td><td>Full RW</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--stack)"></span>stack</td><td>0xBFFF0000</td><td>11</td><td>Full RW</td></tr>
+            <tr><td><span class="seg-color" style="background:var(--kernel)"></span>kernel</td><td>0xC0000000</td><td>00</td><td style="color:var(--red)">FAULT</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- PT Cost -->
+      <div class="mmu-section">
+        <div class="mmu-section-title"><span class="ico">📊</span> Page Table Memory Cost</div>
+        <div class="pt-cost" id="ptCost">
+          L1 table: <span class="cv">16 KB</span> (4096 × 4B)<br>
+          L2 tables active: <span class="cv" id="ptL2Count">0</span><br>
+          L2 total: <span class="cv" id="ptL2Size">0 KB</span><br>
+          Total overhead: <span class="cv" id="ptTotal">16 KB</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ BOTTOM: Trace Log ═══ -->
+<div class="bottom-panel">
+  <div class="panel-header">
+    <span><span class="dot" style="background:var(--green)"></span>Execution Trace Log</span>
+    <span style="font-size:13px;color:var(--tx4)" id="logCount">0 entries</span>
+  </div>
+  <div class="log-body" id="logBody"></div>
+</div>
+
+<!-- Tooltip element -->
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   PRELOADED PROGRAMS
+   ═══════════════════════════════════════════════════════════════ */
+const PROGRAMS = [
+`#include <stdio.h>
+#include <stdlib.h>
+
+int global_count = 0;
+char message[] = "Hello ARM";
+
+int main() {
+    int local_x = 42;
+    int local_y = 100;
+    int *heap_arr = malloc(10 * sizeof(int));
+    heap_arr[0] = 1;
+    heap_arr[9] = 99;
+    free(heap_arr);
+    return 0;
+}`,
+`#include <stdlib.h>
+
+int add(int a, int b) {
+    int result = a + b;
+    return result;
+}
+
+int multiply(int x, int y) {
+    int temp = x;
+    int product = temp * y;
+    return product;
+}
+
+int main() {
+    int val1 = 5;
+    int val2 = 3;
+    int sum = add(val1, val2);
+    int prod = multiply(val1, val2);
+    return 0;
+}`,
+`#include <stdlib.h>
+
+struct Node {
+    int data;
+    struct Node *next;
+};
+
+int main() {
+    struct Node *head = malloc(sizeof(struct Node));
+    head->data = 10;
+    head->next = malloc(sizeof(struct Node));
+    head->next->data = 20;
+    head->next->next = NULL;
+    free(head->next);
+    free(head);
+    return 0;
+}`,
+`#include <stdlib.h>
+#include <string.h>
+
+static int call_count = 0;
+const char *label = "ARM SIM";
+
+void process(char *buf, int size) {
+    call_count++;
+    int i;
+    for (i = 0; i < size; i++) {
+        buf[i] = i % 256;
+    }
+}
+
+int main() {
+    char stack_buf[128];
+    char *heap_buf = malloc(512);
+    process(stack_buf, 128);
+    process(heap_buf, 512);
+    free(heap_buf);
+    return 0;
+}`,
+`#include <stdlib.h>
+
+int *global_ptr;
+
+int main() {
+    int local = 99;
+    global_ptr = malloc(sizeof(int));
+    *global_ptr = 42;
+    free(global_ptr);
+    int *null_test = NULL;
+    return 0;
+}`
+];
+
+/* ═══════════════════════════════════════════════════════════════
+   C CODE PARSER
+   ═══════════════════════════════════════════════════════════════ */
+const Parser = {
+  sizeOf(type) {
+    type = type.replace(/\s+/g,' ').trim();
+    if (type.includes('*')) return 4;
+    if (type === 'char') return 1;
+    if (type === 'short') return 2;
+    if (type === 'int' || type === 'float' || type === 'unsigned int' || type === 'long') return 4;
+    if (type === 'double' || type === 'long long') return 8;
+    if (type.startsWith('struct ')) {
+      const sn = type.replace('struct ','').trim();
+      if (this._structs && this._structs[sn]) return this._structs[sn].size;
+      return 8;
+    }
+    return 4;
+  },
+  alignOf(type) {
+    const s = this.sizeOf(type);
+    if (s >= 8) return 8;
+    if (s >= 4) return 4;
+    if (s >= 2) return 2;
+    return 1;
+  },
+  alignUp(addr, align) { return (addr + align - 1) & ~(align - 1); },
+
+  parse(code) {
+    this._structs = {};
+    const lines = code.split('\n');
+    const result = {
+      globals: [], functions: [], heap_ops: [], structs: {},
+      segments: {
+        text:   { start: 0x00008000, end: 0x0000FFFF },
+        rodata: { start: 0x00010000, end: 0x00010FFF },
+        data:   { start: 0x00011000, end: 0x00011FFF },
+        bss:    { start: 0x00012000, end: 0x00012FFF },
+        heap:   { start: 0xB0000000, end: 0xBEFFFFFF },
+        stack:  { start: 0xBFFFFFFF, end: 0xBF000000 },
+        kernel: { start: 0xC0000000, end: 0xFFFFFFFF }
+      }
+    };
+
+    // Parse structs
+    const structRe = /struct\s+(\w+)\s*\{([^}]*)\}/g;
+    let sm;
+    while ((sm = structRe.exec(code)) !== null) {
+      const sname = sm[1];
+      const body = sm[2];
+      const fields = [];
+      let sz = 0;
+      const fieldRe = /\s*([\w\s\*]+?)\s+(\w+)\s*;/g;
+      let fm;
+      while ((fm = fieldRe.exec(body)) !== null) {
+        const ft = fm[1].trim();
+        const fn = fm[2];
+        const fs = this.sizeOf(ft);
+        const fa = this.alignOf(ft);
+        sz = this.alignUp(sz, fa);
+        fields.push({ name: fn, type: ft, size: fs, offset: sz });
+        sz += fs;
+      }
+      sz = this.alignUp(sz, 4);
+      this._structs[sname] = { fields, size: sz };
+      result.structs[sname] = { fields, size: sz };
+    }
+
+    let inFunction = null;
+    let braceDepth = 0;
+    let dataAddr = 0x00011000;
+    let bssAddr = 0x00012000;
+    let textAddr = 0x00008000;
+    let heapAddr = 0xB0001000;
+    let stackAddr = 0xBFFFF9FC;
+    let stepIdx = 0;
+    let rodataAddr = 0x00010000;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineNum = i + 1;
+      if (!line || line.startsWith('#') || line.startsWith('//') || line.startsWith('/*')) continue;
+
+      // Count braces
+      for (const ch of line) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') { braceDepth--; if (braceDepth <= 0 && inFunction) { inFunction = null; braceDepth = 0; } }
+      }
+
+      // Function definition
+      const funcRe = /^(?:static\s+)?(?:void|int|char|float|double|long|unsigned|struct\s+\w+)\s*\*?\s*(\w+)\s*\(([^)]*)\)\s*\{?$/;
+      const funcM = line.match(funcRe);
+      if (funcM && !inFunction) {
+        const fname = funcM[1];
+        const paramsStr = funcM[2];
+        const params = [];
+        if (paramsStr && paramsStr.trim() !== 'void' && paramsStr.trim() !== '') {
+          paramsStr.split(',').forEach(p => {
+            p = p.trim();
+            const parts = p.split(/\s+/);
+            const pname = parts[parts.length - 1].replace('*','');
+            const ptype = parts.slice(0, -1).join(' ').replace('*','').trim() || 'int';
+            params.push({ name: pname, type: ptype + (p.includes('*') ? ' *' : ''), size: p.includes('*') ? 4 : this.sizeOf(ptype) });
+          });
+        }
+        const func = { name: fname, va: textAddr, size: 48 + Math.floor(Math.random() * 64), locals: [], params, line: lineNum };
+        textAddr = this.alignUp(textAddr + func.size, 4);
+        result.functions.push(func);
+        inFunction = func;
+        stackAddr = 0xBFFFF9FC;
+        if (line.includes('{')) braceDepth = 1;
+        continue;
+      }
+
+      // Inside function — locals, mallocs, etc.
+      if (inFunction) {
+        // Malloc / calloc / realloc
+        const mallocRe = /(?:(\w+)\s*\*?\s*(\w+)\s*=\s*)?(?:(\w+)\s*=\s*)?(?:\(\w+\s*\*\)\s*)?malloc\s*\((.+?)\)/;
+        const callocRe = /(?:(\w+)\s*\*?\s*(\w+)\s*=\s*)?(?:(\w+)\s*=\s*)?calloc\s*\((.+?),\s*(.+?)\)/;
+        const freeRe = /free\s*\(\s*(\w+)/;
+        const reallocRe = /(?:(\w+)\s*=\s*)?realloc\s*\((\w+)\s*,\s*(.+?)\)/;
+
+        let mm;
+        if ((mm = line.match(mallocRe))) {
+          const vname = mm[2] || mm[3] || 'ptr';
+          let sizeExpr = mm[4];
+          let sz = this.evalSizeExpr(sizeExpr);
+          const allocAddr = this.alignUp(heapAddr, 4096);
+          result.heap_ops.push({ op: 'malloc', size: sz, var_name: vname, va: allocAddr, line: lineNum, step_index: stepIdx++ });
+          heapAddr = allocAddr + this.alignUp(sz, 16);
+          // Also add as local pointer
+          stackAddr -= 4;
+          inFunction.locals.push({ name: vname, type: 'int *', size: 4, va: stackAddr, offset: 0xBFFFFA00 - stackAddr, line: lineNum, heap_ref: allocAddr });
+          continue;
+        }
+        if ((mm = line.match(callocRe))) {
+          const vname = mm[2] || mm[3] || 'ptr';
+          let n = this.evalSizeExpr(mm[4]);
+          let eachSz = this.evalSizeExpr(mm[5]);
+          let sz = n * eachSz;
+          const allocAddr = this.alignUp(heapAddr, 4096);
+          result.heap_ops.push({ op: 'calloc', size: sz, var_name: vname, va: allocAddr, line: lineNum, step_index: stepIdx++ });
+          heapAddr = allocAddr + this.alignUp(sz, 16);
+          stackAddr -= 4;
+          inFunction.locals.push({ name: vname, type: 'void *', size: 4, va: stackAddr, offset: 0xBFFFFA00 - stackAddr, line: lineNum, heap_ref: allocAddr });
+          continue;
+        }
+        if ((mm = line.match(freeRe))) {
+          result.heap_ops.push({ op: 'free', size: 0, var_name: mm[1], va: 0, line: lineNum, step_index: stepIdx++ });
+          continue;
+        }
+        if ((mm = line.match(reallocRe))) {
+          const vname = mm[1] || mm[2];
+          let sz = this.evalSizeExpr(mm[3]);
+          const allocAddr = this.alignUp(heapAddr, 4096);
+          result.heap_ops.push({ op: 'realloc', size: sz, var_name: vname, va: allocAddr, line: lineNum, step_index: stepIdx++ });
+          heapAddr = allocAddr + this.alignUp(sz, 16);
+          continue;
+        }
+
+        // Local variable
+        const localRe = /^(?:const\s+)?(?:static\s+)?((?:struct\s+\w+|unsigned\s+\w+|\w+))\s*(\*?)\s*(\w+)(?:\[(\d+)\])?\s*(?:=\s*(.+?))?\s*;/;
+        const lm = line.match(localRe);
+        if (lm) {
+          const ltype = lm[1] + (lm[2] || '');
+          const lname = lm[3];
+          let lsize = lm[4] ? parseInt(lm[4]) * this.sizeOf(lm[1]) : this.sizeOf(ltype);
+          const lalign = Math.max(this.alignOf(ltype), 4);
+          stackAddr = (stackAddr - lsize) & ~(lalign - 1);
+          inFunction.locals.push({ name: lname, type: ltype + (lm[4] ? '['+lm[4]+']' : ''), size: lsize, va: stackAddr, offset: 0xBFFFFA00 - stackAddr, line: lineNum, value: lm[5] || undefined });
+          stepIdx++;
+          continue;
+        }
+
+        // Write ops: arr[n] = val, *ptr = val, var = val
+        const writeRe = /(\w+)\[(\d+)\]\s*=\s*(.+?)\s*;|(\w+)->(\w+)\s*=\s*(.+?)\s*;|\*(\w+)\s*=\s*(.+?)\s*;/;
+        const wm = line.match(writeRe);
+        if (wm) { stepIdx++; continue; }
+      } else {
+        // Global scope
+        const globalRe = /^(?:static\s+)?(?:const\s+)?((?:struct\s+\w+|unsigned\s+\w+|\w+))\s*(\*?)\s*(\w+)(?:\[(\d+)?\])?\s*(?:=\s*(.+?))?\s*;/;
+        const gm = line.match(globalRe);
+        if (gm) {
+          const gtype = gm[1] + (gm[2] || '');
+          const gname = gm[3];
+          const isInit = !!gm[5];
+          let gsize;
+          if (gm[4]) {
+            gsize = parseInt(gm[4]) * this.sizeOf(gm[1]);
+          } else if (gm[5] && gm[5].startsWith('"')) {
+            gsize = gm[5].length - 2 + 1; // string length + null
+          } else {
+            gsize = this.sizeOf(gtype);
+          }
+          const seg = isInit ? 'data' : 'bss';
+          let addr;
+          if (seg === 'data') {
+            dataAddr = this.alignUp(dataAddr, this.alignOf(gtype));
+            addr = dataAddr;
+            dataAddr += gsize;
+          } else {
+            bssAddr = this.alignUp(bssAddr, this.alignOf(gtype));
+            addr = bssAddr;
+            bssAddr += gsize;
+          }
+          const isConst = line.includes('const');
+          if (isConst && gm[5] && gm[5].startsWith('"')) {
+            addr = rodataAddr;
+            rodataAddr += gsize;
+          }
+          result.globals.push({
+            name: gname, type: gtype + (gm[4] ? '['+(gm[4]||'')+']' : ''), size: gsize,
+            segment: isConst ? 'rodata' : seg, initialized: isInit,
+            value: gm[5] || (isInit ? '0' : undefined), va: addr, line: lineNum
+          });
+        }
+      }
+    }
+
+    // Backfill free VA
+    result.heap_ops.forEach(hop => {
+      if (hop.op === 'free') {
+        const alloc = result.heap_ops.find(h => h.var_name === hop.var_name && h.op !== 'free');
+        if (alloc) hop.va = alloc.va;
+      }
+    });
+    return result;
+  },
+
+  evalSizeExpr(expr) {
+    if (!expr) return 4;
+    expr = expr.trim();
+    expr = expr.replace(/sizeof\s*\(\s*struct\s+(\w+)\s*\)/g, (_, n) => {
+      return (this._structs && this._structs[n]) ? this._structs[n].size : 8;
+    });
+    expr = expr.replace(/sizeof\s*\(\s*(\w+)\s*\)/g, (_, t) => this.sizeOf(t));
+    try { return Math.max(1, Math.floor(eval(expr))); } catch(e) { return 4; }
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   ARM MMU ENGINE
+   ═══════════════════════════════════════════════════════════════ */
+const ARM_MMU = {
+  TLB_SIZE: 32,
+  tlb: [],
+  l1Table: {},
+  l2Tables: {},
+  stats: { hits: 0, misses: 0 },
+  activeL2Regions: new Set(),
+
+  init() {
+    this.tlb = [];
+    for (let i = 0; i < this.TLB_SIZE; i++) this.tlb.push({ valid: false, vaTag: 0, paBase: 0, ap: 0, c: 0, b: 0 });
+    this.l1Table = {};
+    this.l2Tables = {};
+    this.stats = { hits: 0, misses: 0 };
+    this.activeL2Regions = new Set();
+    this.nextTLBEntry = 0;
+  },
+
+  va_to_pa(va) {
+    const PAGE_SIZE = 0x1000;
+    const PHYS_BASE = 0xA0000000;
+    const vpage = (va >>> 12);
+    const pframe = ((vpage * 1664525 + 1013904223) & 0x0FFFF);
+    return ((PHYS_BASE + pframe * PAGE_SIZE) | (va & 0xFFF)) >>> 0;
+  },
+
+  getAP(va) {
+    if (va >= 0xC0000000) return 0;  // kernel — no user access
+    if (va >= 0x00008000 && va < 0x00011000) return 1; // text+rodata — user RO
+    return 3; // data, bss, heap, stack — full RW
+  },
+
+  getCB(va) {
+    if (va >= 0xB0000000 && va < 0xC0000000) return { c: 0, b: 1 }; // heap/stack: buffered, not cached
+    return { c: 1, b: 1 }; // text/data: cached+buffered
+  },
+
+  makePTE(pa, ap, c, b) {
+    let pte = (pa & 0xFFFFF000) >>> 0;
+    pte |= ((ap & 0x3) << 10);
+    pte |= ((ap & 0x3) << 8);
+    pte |= ((ap & 0x3) << 6);
+    pte |= ((ap & 0x3) << 4);
+    pte |= (c ? 1 : 0) << 3;
+    pte |= (b ? 1 : 0) << 2;
+    pte |= 0b10; // small page
+    return pte >>> 0;
+  },
+
+  makeL1Entry(l2Base) {
+    let entry = (l2Base & 0xFFFFFC00) >>> 0;
+    entry |= 0x11; // domain 0, coarse page table (bits[1:0]=01)
+    return entry >>> 0;
+  },
+
+  translate(va) {
+    const vaTag = (va >>> 12);
+    const pageOffset = va & 0xFFF;
+    const result = { va, vaTag, pageOffset, tlbHit: false, tlbIdx: -1, pa: 0, pte: 0, ap: 0, c: 0, b: 0, fault: false, walkSteps: [] };
+
+    // Check for kernel access
+    if (va >= 0xC0000000) {
+      result.fault = true;
+      result.faultType = 'PERMISSION FAULT — kernel space access (AP=00)';
+      return result;
+    }
+
+    // TLB lookup
+    for (let i = 0; i < this.tlb.length; i++) {
+      if (this.tlb[i].valid && this.tlb[i].vaTag === vaTag) {
+        result.tlbHit = true;
+        result.tlbIdx = i;
+        result.pa = ((this.tlb[i].paBase & 0xFFFFF000) | pageOffset) >>> 0;
+        result.pte = this.makePTE(this.tlb[i].paBase, this.tlb[i].ap, this.tlb[i].c, this.tlb[i].b);
+        result.ap = this.tlb[i].ap;
+        result.c = this.tlb[i].c;
+        result.b = this.tlb[i].b;
+        this.stats.hits++;
+        return result;
+      }
+    }
+
+    // TLB miss → page table walk
+    this.stats.misses++;
+    const l1Index = (va >>> 20) & 0xFFF;
+    const l2Index = (va >>> 12) & 0xFF;
+    const pa = this.va_to_pa(va);
+    const paBase = pa & 0xFFFFF000;
+    const ap = this.getAP(va);
+    const cb = this.getCB(va);
+
+    // Simulate L1 table
+    const l2TableBase = (0x80000000 + l1Index * 1024) >>> 0;
+    const l1Entry = this.makeL1Entry(l2TableBase);
+    this.l1Table[l1Index] = l1Entry;
+    this.activeL2Regions.add(l1Index);
+
+    // Simulate L2 table
+    const pte = this.makePTE(paBase, ap, cb.c, cb.b);
+    if (!this.l2Tables[l1Index]) this.l2Tables[l1Index] = {};
+    this.l2Tables[l1Index][l2Index] = pte;
+
+    // Walk steps
+    result.walkSteps.push({
+      label: 'L1', index: l1Index,
+      addr: (0x80000000 + l1Index * 4) >>> 0,
+      value: l1Entry,
+      type: 'COARSE TABLE',
+      bits10: '01'
+    });
+    result.walkSteps.push({
+      label: 'L2', index: l2Index,
+      addr: (l2TableBase + l2Index * 4) >>> 0,
+      value: pte,
+      type: 'SMALL PAGE (4KB)',
+      bits10: '10'
+    });
+
+    result.pa = pa;
+    result.pte = pte;
+    result.ap = ap;
+    result.c = cb.c;
+    result.b = cb.b;
+
+    // Fill TLB
+    result.tlbFillIdx = this.nextTLBEntry;
+    this.tlb[this.nextTLBEntry] = { valid: true, vaTag, paBase, ap, c: cb.c, b: cb.b };
+    this.nextTLBEntry = (this.nextTLBEntry + 1) % this.TLB_SIZE;
+
+    return result;
+  },
+
+  apString(ap) {
+    switch(ap) {
+      case 0: return 'No access (fault)';
+      case 1: return 'Kern RW / User RO';
+      case 2: return 'Kern RW / User RO (deprecated)';
+      case 3: return 'Full RW (kern + user)';
+      default: return 'Unknown';
+    }
+  },
+
+  flush() {
+    this.tlb.forEach(e => e.valid = false);
+    this.nextTLBEntry = 0;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   MEMORY MAP VISUALIZER
+   ═══════════════════════════════════════════════════════════════ */
+const MemoryMap = {
+  pins: [],
+  heapBlocks: [],
+  placedYPositions: {},  // track placed pin Y per segment for collision avoidance
+  svgNS: 'http://www.w3.org/2000/svg',
+  PIN_HEIGHT: 30,  // vertical space each pin label needs
+
+  segDefs: [
+    { id:'kernel', label:'KERNEL',     start:0xC0000000, end:0xFFFFFFFF, color:'var(--kernel)', y:0,   h:55 },
+    { id:'stack',  label:'STACK ↓',    start:0xBFFF0000, end:0xBFFFFFFF, color:'var(--stack)',  y:60,  h:120 },
+    { id:'free1',  label:'(free)',      start:0xB1000000, end:0xBEFFFFFF, color:'var(--bg3)',    y:185, h:15 },
+    { id:'heap',   label:'HEAP ↑',     start:0xB0000000, end:0xB0FFFFFF, color:'var(--purple)', y:205, h:100 },
+    { id:'free2',  label:'',           start:0x00013000, end:0xAFFFFFFF, color:'var(--bg3)',    y:310, h:10 },
+    { id:'bss',    label:'.BSS',       start:0x00012000, end:0x00012FFF, color:'var(--bss)',    y:325, h:50 },
+    { id:'data',   label:'.DATA',      start:0x00011000, end:0x00011FFF, color:'var(--data)',   y:380, h:80 },
+    { id:'rodata', label:'.RODATA',    start:0x00010000, end:0x00010FFF, color:'var(--rodata)', y:465, h:45 },
+    { id:'text',   label:'.TEXT',      start:0x00008000, end:0x0000FFFF, color:'var(--code)',   y:515, h:70 },
+    { id:'reserved',label:'(reserved)',start:0x00000000, end:0x00007FFF, color:'var(--bg3)',    y:590, h:25 },
+  ],
+
+  render(parsed) {
+    this.pins = [];
+    this.heapBlocks = [];
+    this.placedYPositions = {};
+    const svg = document.getElementById('memmapSvg');
+    svg.innerHTML = '';
+    const container = document.getElementById('memmapContainer');
+    const W = container.clientWidth || 400;
+    const H = container.clientHeight || 600;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const leftMargin = 90;
+    const barW = 110;
+    const barX = leftMargin;
+    const pinX = barX + barW + 14;
+    const scaleY = H / 620;
+
+    // Draw segments
+    this.segDefs.forEach((seg, i) => {
+      const y = seg.y * scaleY;
+      const h = seg.h * scaleY;
+      const g = document.createElementNS(this.svgNS, 'g');
+      g.setAttribute('class', 'seg-group');
+      g.style.animation = `seg-in 0.4s ease ${i * 80}ms both`;
+
+      const rect = document.createElementNS(this.svgNS, 'rect');
+      rect.setAttribute('x', barX);
+      rect.setAttribute('y', y);
+      rect.setAttribute('width', barW);
+      rect.setAttribute('height', Math.max(h, 6));
+      rect.setAttribute('rx', 4);
+      rect.setAttribute('fill', seg.color);
+      rect.setAttribute('opacity', seg.id.startsWith('free') || seg.id === 'reserved' ? '0.12' : '0.25');
+      rect.setAttribute('stroke', seg.color);
+      rect.setAttribute('stroke-opacity', '0.5');
+      rect.setAttribute('stroke-width', '1');
+      g.appendChild(rect);
+
+      // Segment label — centered inside the block
+      if (seg.label) {
+        const txt = document.createElementNS(this.svgNS, 'text');
+        txt.setAttribute('x', barX + barW / 2);
+        txt.setAttribute('y', y + h / 2 + 5);
+        txt.setAttribute('text-anchor', 'middle');
+        txt.setAttribute('fill', seg.color);
+        txt.setAttribute('font-size', '14');
+        txt.setAttribute('font-weight', '700');
+        txt.setAttribute('font-family', 'var(--font)');
+        txt.setAttribute('opacity', '0.9');
+        txt.textContent = seg.label;
+        g.appendChild(txt);
+      }
+
+      // Address label — left of the bar, vertically centered on top edge
+      if (!seg.id.startsWith('free') && seg.id !== 'reserved') {
+        const addrTxt = document.createElementNS(this.svgNS, 'text');
+        addrTxt.setAttribute('x', barX - 6);
+        addrTxt.setAttribute('y', y + 12);
+        addrTxt.setAttribute('text-anchor', 'end');
+        addrTxt.setAttribute('fill', 'var(--tx3)');
+        addrTxt.setAttribute('font-size', '11');
+        addrTxt.setAttribute('font-family', 'var(--font)');
+        addrTxt.textContent = '0x' + seg.start.toString(16).toUpperCase().padStart(8,'0');
+        g.appendChild(addrTxt);
+      }
+
+      svg.appendChild(g);
+    });
+
+    // ── Collect all pins per segment first, then place with collision avoidance ──
+    if (!parsed) return;
+    const pinsBySegment = {};
+
+    // Global variable pins
+    parsed.globals.forEach(g => {
+      const seg = g.segment;
+      if (!pinsBySegment[seg]) pinsBySegment[seg] = [];
+      pinsBySegment[seg].push({ name: g.name, type: g.type, size: g.size, va: g.va, segment: seg });
+    });
+
+    // Function pins → text segment
+    parsed.functions.forEach(f => {
+      if (!pinsBySegment['text']) pinsBySegment['text'] = [];
+      pinsBySegment['text'].push({ name: f.name + '()', type: 'func', size: f.size, va: f.va, segment: 'text' });
+    });
+
+    // Local variable pins → stack segment
+    parsed.functions.forEach(f => {
+      f.locals.forEach(l => {
+        if (!pinsBySegment['stack']) pinsBySegment['stack'] = [];
+        pinsBySegment['stack'].push({ name: l.name, type: l.type, size: l.size, va: l.va, segment: 'stack' });
+      });
+    });
+
+    // Now place all pins segment by segment, evenly distributed with no overlap
+    let globalPinIdx = 0;
+    for (const segId of Object.keys(pinsBySegment)) {
+      const segPins = pinsBySegment[segId];
+      const segDef = this.segDefs.find(s => s.id === segId);
+      if (!segDef || segPins.length === 0) continue;
+
+      const segTop = segDef.y * scaleY;
+      const segH = segDef.h * scaleY;
+      const pinSpacing = Math.min(this.PIN_HEIGHT, segH / (segPins.length + 1));
+
+      // Distribute pins evenly within the segment vertical space
+      // Start from top of segment + offset, space evenly
+      const startOffset = Math.max(8, (segH - segPins.length * pinSpacing) / 2);
+
+      segPins.forEach((p, i) => {
+        const pinY = segTop + startOffset + i * pinSpacing;
+        this.drawPin(svg, p.name, p.type, p.size, p.va, p.segment, pinX, pinY, barX + barW, globalPinIdx++);
+      });
+    }
+  },
+
+  drawPin(svg, name, type, size, va, segment, pinX, y, barRight, idx) {
+    const seg = this.segDefs.find(s => s.id === segment);
+    if (!seg) return;
+
+    const g = document.createElementNS(this.svgNS, 'g');
+    g.style.animation = `pin-in 0.3s ease ${idx * 80 + 200}ms both`;
+    g.setAttribute('data-va', va);
+    g.setAttribute('class', 'pin-group');
+
+    // Connector line from bar edge to pin dot
+    const line = document.createElementNS(this.svgNS, 'line');
+    line.setAttribute('x1', barRight);
+    line.setAttribute('y1', y);
+    line.setAttribute('x2', pinX);
+    line.setAttribute('y2', y);
+    line.setAttribute('stroke', seg.color);
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('stroke-opacity', '0.4');
+    line.setAttribute('stroke-dasharray', '3,3');
+    g.appendChild(line);
+
+    // Pin dot
+    const circle = document.createElementNS(this.svgNS, 'circle');
+    circle.setAttribute('cx', pinX);
+    circle.setAttribute('cy', y);
+    circle.setAttribute('r', '5');
+    circle.setAttribute('fill', seg.color);
+    g.appendChild(circle);
+
+    // Pin name label
+    const txt = document.createElementNS(this.svgNS, 'text');
+    txt.setAttribute('x', pinX + 10);
+    txt.setAttribute('y', y + 1);
+    txt.setAttribute('fill', 'var(--tx)');
+    txt.setAttribute('font-size', '13');
+    txt.setAttribute('font-weight', '500');
+    txt.setAttribute('font-family', 'var(--font)');
+    const sizeStr = size >= 1024 ? (size/1024)+'KB' : size+'B';
+    txt.textContent = `${name} (${sizeStr})`;
+    g.appendChild(txt);
+
+    // VA hex label — on next line below name
+    const vaTxt = document.createElementNS(this.svgNS, 'text');
+    vaTxt.setAttribute('x', pinX + 10);
+    vaTxt.setAttribute('y', y + 16);
+    vaTxt.setAttribute('fill', 'var(--tx3)');
+    vaTxt.setAttribute('font-size', '11');
+    vaTxt.setAttribute('font-family', 'var(--font)');
+    vaTxt.textContent = '0x' + (va >>> 0).toString(16).toUpperCase().padStart(8,'0');
+    g.appendChild(vaTxt);
+
+    svg.appendChild(g);
+    this.pins.push({ name, va, segment, element: g, y });
+  },
+
+  highlightPin(va) {
+    this.pins.forEach(p => {
+      const c = p.element.querySelector('circle');
+      if (!c) return;
+      if ((p.va >>> 0) === (va >>> 0)) {
+        c.setAttribute('r', '8');
+        c.setAttribute('opacity', '1');
+        c.style.filter = 'drop-shadow(0 0 6px currentColor)';
+      } else {
+        c.setAttribute('r', '5');
+        c.setAttribute('opacity', '0.8');
+        c.style.filter = '';
+      }
+    });
+  },
+
+  addHeapBlock(svg, va, size, name) {
+    const seg = this.segDefs.find(s => s.id === 'heap');
+    if (!seg) return;
+    const container = document.getElementById('memmapContainer');
+    const H = container.clientHeight || 600;
+    const scaleY = H / 620;
+    const pinX = 214;
+    const pinY = (seg.y + seg.h * 0.5) * scaleY;
+    this.drawPin(svg || document.getElementById('memmapSvg'), name, 'heap', size, va, 'heap', pinX, pinY, 204, this.pins.length);
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   LOGGER
+   ═══════════════════════════════════════════════════════════════ */
+const Logger = {
+  entries: [],
+  time: 0,
+
+  log(type, msg) {
+    const ts = String(this.time++).padStart(4, '0');
+    const entry = { time: ts, type, msg };
+    this.entries.push(entry);
+    const div = document.getElementById('logBody');
+    const el = document.createElement('div');
+    el.className = 'log-entry highlight';
+    el.innerHTML = `<span class="log-t">[T=${ts}]</span>  <span class="log-${type.toLowerCase().replace(/\s/g,'-')}">${this.pad(type,10)}</span> ${msg}`;
+    div.appendChild(el);
+    div.scrollTop = div.scrollHeight;
+    setTimeout(() => el.classList.remove('highlight'), 1200);
+    document.getElementById('logCount').textContent = this.entries.length + ' entries';
+  },
+
+  pad(s, n) { return s.padEnd(n, ' '); },
+
+  clear() {
+    this.entries = [];
+    this.time = 0;
+    document.getElementById('logBody').innerHTML = '';
+    document.getElementById('logCount').textContent = '0 entries';
+  },
+
+  copyTrace() {
+    const text = this.entries.map(e => `[T=${e.time}]  ${e.type.padEnd(10)}  ${e.msg.replace(/<[^>]*>/g, '')}`).join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      UI.showWH('📋 Trace log copied to clipboard (' + this.entries.length + ' entries)');
+    });
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   TLB UI RENDERER
+   ═══════════════════════════════════════════════════════════════ */
+const TLB_UI = {
+  render(highlightIdx, mode) {
+    const tbody = document.getElementById('tlbBody');
+    tbody.innerHTML = '';
+    ARM_MMU.tlb.forEach((e, i) => {
+      const tr = document.createElement('tr');
+      if (!e.valid) tr.className = 'empty';
+      if (i === highlightIdx) {
+        tr.className = mode === 'hit' ? 'hit' : mode === 'miss' ? 'miss' : 'fill-flash';
+      }
+      const vaHex = e.valid ? '0x' + ((e.vaTag << 12) >>> 0).toString(16).toUpperCase().padStart(8,'0').substring(0,5) + 'xxx' : '—';
+      const paHex = e.valid ? '0x' + (e.paBase >>> 0).toString(16).toUpperCase().padStart(8,'0') : '—';
+      const apStr = e.valid ? ['NO','RO','RO','RW'][e.ap] : '—';
+      tr.innerHTML = `
+        <td>${String(i).padStart(2,'0')}</td>
+        <td><span class="tlb-valid ${e.valid?'on':'off'}"></span></td>
+        <td>${vaHex}</td>
+        <td>${paHex}</td>
+        <td>${apStr}</td>
+        <td>${e.valid ? e.c : '—'}</td>
+        <td>${e.valid ? e.b : '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    const total = ARM_MMU.stats.hits + ARM_MMU.stats.misses;
+    document.getElementById('tlbHits').textContent = ARM_MMU.stats.hits;
+    document.getElementById('tlbMisses').textContent = ARM_MMU.stats.misses;
+    document.getElementById('tlbRate').textContent = total > 0 ? ((ARM_MMU.stats.hits / total) * 100).toFixed(1) + '%' : '—';
+
+    const usedTLB = ARM_MMU.tlb.filter(e => e.valid).length;
+    document.getElementById('statTLB').textContent = usedTLB + '/' + ARM_MMU.TLB_SIZE;
+    document.getElementById('statHitRate').textContent = total > 0 ? ((ARM_MMU.stats.hits / total) * 100).toFixed(1) + '%' : '—';
+
+    // Update L2 cost
+    const l2Count = ARM_MMU.activeL2Regions.size;
+    document.getElementById('ptL2Count').textContent = l2Count;
+    document.getElementById('ptL2Size').textContent = l2Count + ' KB';
+    document.getElementById('ptTotal').textContent = (16 + l2Count) + ' KB';
+  },
+
+  showWalk(result) {
+    const div = document.getElementById('walkDisplay');
+    if (!result.walkSteps.length) {
+      div.innerHTML = '<div style="color:var(--green);font-size:14px">✓ TLB Hit — no walk needed</div>';
+      return;
+    }
+
+    const vaHex = '0x' + (result.va >>> 0).toString(16).toUpperCase().padStart(8,'0');
+    const l1Idx = (result.va >>> 20) & 0xFFF;
+    const l2Idx = (result.va >>> 12) & 0xFF;
+    const offset = result.va & 0xFFF;
+
+    let html = `<div class="walk-va">
+      <div style="color:var(--tx2)">VA = <b style="color:var(--blue)">${vaHex}</b></div>
+      <div class="va-bits">
+        <div class="va-bit-group"><div class="bits" style="background:rgba(255,166,87,0.15);color:var(--data)">0x${l1Idx.toString(16).toUpperCase().padStart(3,'0')}</div><div class="blabel">[31:20] L1 idx</div></div>
+        <div class="va-bit-group"><div class="bits" style="background:rgba(188,140,255,0.15);color:var(--purple)">0x${l2Idx.toString(16).toUpperCase().padStart(2,'0')}</div><div class="blabel">[19:12] L2 idx</div></div>
+        <div class="va-bit-group"><div class="bits" style="background:rgba(88,166,255,0.15);color:var(--blue)">0x${offset.toString(16).toUpperCase().padStart(3,'0')}</div><div class="blabel">[11:0] offset</div></div>
+      </div>
+    </div>`;
+
+    result.walkSteps.forEach((ws, i) => {
+      html += `<div class="walk-step" id="ws-${i}" style="animation:seg-in 0.3s ease ${(i+1)*300}ms both">
+        <span class="ws-label">STEP ${i+1}:</span>
+        ${ws.label}[<span class="ws-addr">${ws.index}</span>] @ <span class="ws-addr">0x${(ws.addr>>>0).toString(16).toUpperCase().padStart(8,'0')}</span> = <span class="ws-val">0x${(ws.value>>>0).toString(16).toUpperCase().padStart(8,'0')}</span>
+        <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bits[1:0] = ${ws.bits10} → <span class="ws-type">${ws.type}</span>
+      </div>`;
+    });
+
+    const paHex = '0x' + (result.pa >>> 0).toString(16).toUpperCase().padStart(8,'0');
+    html += `<div class="walk-step" style="animation:seg-in 0.3s ease ${(result.walkSteps.length+1)*300}ms both;margin-top:4px">
+      <span class="ws-label">RESULT:</span> PA = <b style="color:var(--green)">${paHex}</b> ✓
+    </div>`;
+
+    div.innerHTML = html;
+  },
+
+  showPTE(pte, ap, c, b) {
+    const div = document.getElementById('pteDecoder');
+    const bits = (pte >>> 0).toString(2).padStart(32, '0');
+    const fields = [
+      { name:'BASE', start:0, end:19, color:'var(--green)' },
+      { name:'AP3', start:20, end:21, color:'var(--amber)' },
+      { name:'AP2', start:22, end:23, color:'var(--amber)' },
+      { name:'AP1', start:24, end:25, color:'var(--amber)' },
+      { name:'AP0', start:26, end:27, color:'var(--amber)' },
+      { name:'C', start:28, end:28, color:'var(--blue)' },
+      { name:'B', start:29, end:29, color:'var(--stack)' },
+      { name:'1', start:30, end:30, color:'var(--tx3)' },
+      { name:'0', start:31, end:31, color:'var(--tx3)' },
+    ];
+
+    let html = `<div style="font-size:13px;color:var(--tx3);margin-bottom:6px">PTE = 0x${(pte>>>0).toString(16).toUpperCase().padStart(8,'0')}</div>`;
+    html += '<div class="pte-bits">';
+    for (let i = 0; i < 32; i++) {
+      const f = fields.find(f => i >= f.start && i <= f.end);
+      const color = f ? f.color : 'var(--tx4)';
+      if (i % 4 === 0 && i > 0) html += '<div style="width:2px"></div>';
+      html += `<div class="pte-bit" title="Bit ${31-i}"><div class="bv" style="background:${color}20;color:${color}">${bits[i]}</div></div>`;
+    }
+    html += '</div>';
+
+    html += `<div class="pte-decoded">
+      <span style="background:rgba(210,153,34,0.12);color:var(--amber)">AP=${ap} → ${ARM_MMU.apString(ap)}</span><br>
+      <span style="background:rgba(88,166,255,0.12);color:var(--blue)">C=${c} → ${c ? 'Cacheable' : 'Not cached'}</span>
+      <span style="background:rgba(121,192,255,0.12);color:var(--stack)">B=${b} → ${b ? 'Bufferable' : 'Unbuffered'}</span><br>
+      <span style="color:var(--tx4)">Type: Small Page (4KB) — bits[1:0]=10</span>
+    </div>`;
+
+    div.innerHTML = html;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   SIMULATOR
+   ═══════════════════════════════════════════════════════════════ */
+const Simulator = {
+  parsed: null,
+  events: [],
+  currentStep: -1,
+  isRunning: false,
+  activeLine: -1,
+
+  buildEvents(parsed) {
+    const events = [];
+
+    // 1. Segment mapping events
+    const segs = ['text','rodata','data','bss','heap','stack'];
+    segs.forEach(s => {
+      const seg = parsed.segments[s];
+      events.push({ type: 'segment', segment: s, start: seg.start, end: seg.end });
+    });
+
+    // 2. Global variable events
+    parsed.globals.forEach(g => {
+      events.push({ type: 'global', data: g });
+    });
+
+    // 3. Function entry events
+    parsed.functions.forEach(f => {
+      events.push({ type: 'func_entry', data: f });
+
+      // 4. Local variable events
+      f.locals.forEach(l => {
+        events.push({ type: 'local', data: l, func: f.name });
+      });
+    });
+
+    // 5. Heap operation events
+    parsed.heap_ops.forEach(h => {
+      events.push({ type: 'heap_op', data: h });
+    });
+
+    // 6. Write events — scan for writes
+    const lines = document.getElementById('codeArea').value.split('\n');
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      const writeRe = /(\w+)\[(\d+)\]\s*=\s*(.+?)\s*;/;
+      const ptrWriteRe = /(\w+)->(\w+)\s*=\s*(.+?)\s*;/;
+      const derefWriteRe = /\*(\w+)\s*=\s*(.+?)\s*;/;
+      let m;
+      if ((m = trimmed.match(writeRe))) {
+        const arrName = m[1];
+        const idx = parseInt(m[2]);
+        const val = m[3];
+        // Find the variable
+        const heapOp = parsed.heap_ops.find(h => h.var_name === arrName && h.op !== 'free');
+        if (heapOp) {
+          events.push({ type: 'write', name: arrName+'['+idx+']', va: heapOp.va + idx * 4, value: val, line: i+1 });
+        }
+      } else if ((m = trimmed.match(ptrWriteRe))) {
+        const varName = m[1];
+        const field = m[2];
+        const val = m[3];
+        const heapOp = parsed.heap_ops.find(h => h.var_name === varName && h.op !== 'free');
+        if (heapOp) {
+          events.push({ type: 'write', name: varName+'->'+field, va: heapOp.va + (field === 'next' ? 4 : 0), value: val, line: i+1 });
+        }
+      } else if ((m = trimmed.match(derefWriteRe))) {
+        const varName = m[1];
+        const val = m[2];
+        const heapOp = parsed.heap_ops.find(h => h.var_name === varName && h.op !== 'free');
+        if (heapOp) {
+          events.push({ type: 'write', name: '*'+varName, va: heapOp.va, value: val, line: i+1 });
+        }
+      }
+    });
+
+    return events;
+  },
+
+  init() {
+    const code = document.getElementById('codeArea').value;
+    this.parsed = Parser.parse(code);
+    this.events = this.buildEvents(this.parsed);
+    this.currentStep = -1;
+    ARM_MMU.init();
+    Logger.clear();
+    MemoryMap.render(this.parsed);
+    TLB_UI.render(-1, '');
+
+    document.getElementById('statVars').textContent = 0;
+    Logger.log('PARSE', `Found ${this.parsed.globals.length} globals, ${this.parsed.functions.length} functions, ${this.parsed.heap_ops.length} heap ops`);
+    UI.showWH('Program parsed. ' + this.events.length + ' memory events queued. Click Step or Simulate.');
+  },
+
+  step() {
+    if (this.currentStep === -1) this.init();
+    this.currentStep++;
+    if (this.currentStep >= this.events.length) {
+      UI.showWH('✓ Simulation complete — all events processed.');
+      Logger.log('PARSE', 'Simulation complete.');
+      return;
+    }
+    this.processEvent(this.events[this.currentStep]);
+  },
+
+  async run() {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    this.init();
+    document.getElementById('btnSimAll').disabled = true;
+
+    for (let i = 0; i < this.events.length; i++) {
+      this.currentStep = i;
+      this.processEvent(this.events[i]);
+      await new Promise(r => setTimeout(r, 180));
+    }
+
+    UI.showWH('✓ Simulation complete — all ' + this.events.length + ' events processed.');
+    Logger.log('PARSE', 'Simulation complete.');
+    this.isRunning = false;
+    document.getElementById('btnSimAll').disabled = false;
+  },
+
+  processEvent(evt) {
+    const hex = (v) => '0x' + ((v>>>0).toString(16).toUpperCase().padStart(8,'0'));
+    let varCount = parseInt(document.getElementById('statVars').textContent) || 0;
+
+    switch(evt.type) {
+      case 'segment': {
+        const s = evt.segment;
+        Logger.log('SEGMENT', `<span class="log-segment">.${s} mapped ${hex(evt.start)} → ${hex(evt.end)} [${s==='text'||s==='rodata'?'RO':'RW'}, ${evt.start<0xB0000000?'cached':'buffered'}]</span>`);
+        break;
+      }
+      case 'global': {
+        const g = evt.data;
+        Logger.log('VA ASSIGN', `<span class="log-va">${g.name} → ${hex(g.va)} (${g.type}, ${g.size}B, .${g.segment})</span>`);
+        const tr = ARM_MMU.translate(g.va);
+        this.logTranslation(tr, g.name);
+        varCount++;
+        MemoryMap.highlightPin(g.va);
+        UI.showWH(`Global "${g.name}" (${g.type}) mapped to VA ${hex(g.va)} → PA ${hex(tr.pa)}`);
+        break;
+      }
+      case 'func_entry': {
+        const f = evt.data;
+        Logger.log('FUNC', `<span class="log-func">${f.name}() → .text @ ${hex(f.va)} (${f.size}B)</span>`);
+        const tr = ARM_MMU.translate(f.va);
+        this.logTranslation(tr, f.name+'()');
+        UI.showWH(`Function ${f.name}() at .text ${hex(f.va)} — stack frame created`);
+        UI.highlightLine(f.line);
+        break;
+      }
+      case 'local': {
+        const l = evt.data;
+        Logger.log('STACK', `<span class="log-stack">${l.name} = ${l.value||'?'} → ${hex(l.va)} (${l.type}, ${l.size}B, fp-${l.offset})</span>`);
+        const tr = ARM_MMU.translate(l.va);
+        this.logTranslation(tr, l.name);
+        varCount++;
+        MemoryMap.highlightPin(l.va);
+        UI.showWH(`Stack local "${l.name}" at ${hex(l.va)} (${l.type}, ${l.size}B in ${evt.func}() frame)`);
+        UI.highlightLine(l.line);
+        break;
+      }
+      case 'heap_op': {
+        const h = evt.data;
+        if (h.op === 'free') {
+          Logger.log('FREE', `<span class="log-free">${h.var_name} @ ${hex(h.va)} → deallocated</span>`);
+          UI.showWH(`free(${h.var_name}) — heap block at ${hex(h.va)} released`);
+        } else {
+          Logger.log('MALLOC', `<span class="log-malloc">${h.var_name} = ${h.op}(${h.size}) → heap @ ${hex(h.va)}</span>`);
+          const tr = ARM_MMU.translate(h.va);
+          this.logTranslation(tr, h.var_name);
+          varCount++;
+          UI.showWH(`${h.op}(${h.size}) allocated heap block at VA ${hex(h.va)} → PA ${hex(tr.pa)}`);
+        }
+        UI.highlightLine(h.line);
+        break;
+      }
+      case 'write': {
+        const w = evt;
+        const tr = ARM_MMU.translate(w.va);
+        Logger.log('WRITE', `<span class="log-write">${w.name} = ${w.value} @ VA ${hex(w.va)}</span>`);
+        this.logTranslation(tr, w.name);
+        MemoryMap.highlightPin(w.va);
+        UI.showWH(`Write: ${w.name} = ${w.value} at VA ${hex(w.va)} → PA ${hex(tr.pa)}`);
+        UI.highlightLine(w.line);
+        break;
+      }
+    }
+
+    document.getElementById('statVars').textContent = varCount;
+    TLB_UI.render(-1, '');
+  },
+
+  logTranslation(tr, name) {
+    const hex = (v) => '0x' + ((v>>>0).toString(16).toUpperCase().padStart(8,'0'));
+
+    if (tr.fault) {
+      Logger.log('FAULT', `<span class="log-fault">VA ${hex(tr.va)} → ${tr.faultType}</span>`);
+      TLB_UI.render(-1, '');
+      TLB_UI.showWalk(tr);
+      return;
+    }
+
+    if (tr.tlbHit) {
+      Logger.log('TLB HIT', `<span class="log-tlb-hit">VA ${hex(tr.va)} → ${hex(tr.pa)} (entry #${tr.tlbIdx})</span>`);
+      TLB_UI.render(tr.tlbIdx, 'hit');
+      TLB_UI.showWalk(tr);
+      TLB_UI.showPTE(tr.pte, tr.ap, tr.c, tr.b);
+    } else {
+      Logger.log('TLB MISS', `<span class="log-tlb-miss">VA ${hex(tr.va)} → walking page tables...</span>`);
+
+      tr.walkSteps.forEach((ws, i) => {
+        Logger.log('PT WALK', `<span class="log-walk">${ws.label}[${ws.index}] @ ${hex(ws.addr)} = ${hex(ws.value)} → ${ws.type}</span>`);
+      });
+
+      Logger.log('PA MAP', `<span class="log-pa">${hex(tr.va)} → ${hex(tr.pa)} [AP=${['NO','RO','RO','RW'][tr.ap]}, C=${tr.c}, B=${tr.b}]</span>`);
+      Logger.log('TLB FILL', `<span class="log-tlb-fill">Entry[${String(tr.tlbFillIdx).padStart(2,'0')}]: VA_TAG=${hex(tr.vaTag<<12).substring(0,7)}xxx → PA=${hex(tr.pa & 0xFFFFF000)} ✓</span>`);
+
+      TLB_UI.render(tr.tlbFillIdx, 'fill');
+      TLB_UI.showWalk(tr);
+      TLB_UI.showPTE(tr.pte, tr.ap, tr.c, tr.b);
+    }
+  },
+
+  reset() {
+    this.parsed = null;
+    this.events = [];
+    this.currentStep = -1;
+    this.isRunning = false;
+    ARM_MMU.init();
+    Logger.clear();
+    TLB_UI.render(-1, '');
+    MemoryMap.render(null);
+    document.getElementById('statVars').textContent = '0';
+    document.getElementById('statTLB').textContent = '0/32';
+    document.getElementById('statHitRate').textContent = '—';
+    document.getElementById('walkDisplay').innerHTML = '<div style="color:var(--tx4);font-style:italic;font-size:14px">Waiting for TLB miss...</div>';
+    document.getElementById('pteDecoder').innerHTML = '<div style="color:var(--tx4);font-style:italic;font-size:14px">No PTE selected</div>';
+    document.getElementById('ptL2Count').textContent = '0';
+    document.getElementById('ptL2Size').textContent = '0 KB';
+    document.getElementById('ptTotal').textContent = '16 KB';
+    UI.showWH('Simulator reset. Load a program and click Simulate or Step.');
+    UI.clearLineHighlight();
+    document.getElementById('btnSimAll').disabled = false;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   UI CONTROLLER
+   ═══════════════════════════════════════════════════════════════ */
+const UI = {
+  init() {
+    // Load first program
+    this.loadProgram(0);
+    this.bindEvents();
+    ARM_MMU.init();
+    TLB_UI.render(-1, '');
+    MemoryMap.render(null);
+  },
+
+  loadProgram(idx) {
+    document.getElementById('codeArea').value = PROGRAMS[idx];
+    this.updateLineNumbers();
+    Simulator.reset();
+  },
+
+  updateLineNumbers() {
+    const code = document.getElementById('codeArea').value;
+    const lines = code.split('\n');
+    const nums = document.getElementById('lineNums');
+    nums.innerHTML = lines.map((_, i) => `<div id="ln-${i+1}">${i + 1}</div>`).join('');
+  },
+
+  highlightLine(lineNum) {
+    this.clearLineHighlight();
+    if (lineNum < 1) return;
+    const lnEl = document.getElementById('ln-' + lineNum);
+    if (lnEl) {
+      lnEl.classList.add('active-ln');
+      lnEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    // Highlight in textarea — we set a custom style via background gradient trick
+    Simulator.activeLine = lineNum;
+  },
+
+  clearLineHighlight() {
+    document.querySelectorAll('.line-nums .active-ln').forEach(el => el.classList.remove('active-ln'));
+    Simulator.activeLine = -1;
+  },
+
+  showWH(text) {
+    const el = document.getElementById('whText');
+    el.style.opacity = '0';
+    setTimeout(() => {
+      el.textContent = text;
+      el.style.opacity = '1';
+    }, 150);
+  },
+
+  bindEvents() {
+    // Program selector
+    document.getElementById('programSelect').addEventListener('change', (e) => {
+      this.loadProgram(parseInt(e.target.value));
+    });
+
+    // Code textarea changes
+    document.getElementById('codeArea').addEventListener('input', () => {
+      this.updateLineNumbers();
+    });
+
+    // Theme toggle
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      const toggle = document.getElementById('themeToggle');
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      if (isLight) {
+        document.documentElement.removeAttribute('data-theme');
+        toggle.classList.remove('light');
+      } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+        toggle.classList.add('light');
+      }
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+      switch(e.key) {
+        case ' ':
+        case 'ArrowRight':
+          e.preventDefault();
+          Simulator.step();
+          break;
+        case 'r':
+        case 'R':
+          Simulator.reset();
+          break;
+        case 's':
+        case 'S':
+          Simulator.run();
+          break;
+        case 't':
+        case 'T':
+          document.getElementById('themeToggle').click();
+          break;
+        case '1': case '2': case '3': case '4': case '5':
+          this.loadProgram(parseInt(e.key) - 1);
+          document.getElementById('programSelect').value = parseInt(e.key) - 1;
+          break;
+      }
+    });
+
+    // Resize handler for SVG
+    window.addEventListener('resize', () => {
+      if (Simulator.parsed) {
+        MemoryMap.render(Simulator.parsed);
+      } else {
+        MemoryMap.render(null);
+      }
+    });
+
+    // Code editor line click
+    document.getElementById('codeArea').addEventListener('click', (e) => {
+      const ta = e.target;
+      const pos = ta.selectionStart;
+      const text = ta.value.substring(0, pos);
+      const lineNum = text.split('\n').length;
+      this.highlightLine(lineNum);
+
+      // If simulation is loaded, try to show info for this line
+      if (Simulator.parsed) {
+        const allVars = [
+          ...Simulator.parsed.globals,
+          ...Simulator.parsed.functions.flatMap(f => f.locals),
+        ];
+        const varOnLine = allVars.find(v => v.line === lineNum);
+        if (varOnLine) {
+          const tr = ARM_MMU.translate(varOnLine.va);
+          MemoryMap.highlightPin(varOnLine.va);
+          TLB_UI.showWalk(tr);
+          TLB_UI.showPTE(tr.pte, tr.ap, tr.c, tr.b);
+          TLB_UI.render(tr.tlbHit ? tr.tlbIdx : (tr.tlbFillIdx || -1), tr.tlbHit ? 'hit' : 'fill');
+          UI.showWH(`Line ${lineNum}: ${varOnLine.name} at VA 0x${(varOnLine.va>>>0).toString(16).toUpperCase().padStart(8,'0')}`);
+        }
+        const funcOnLine = Simulator.parsed.functions.find(f => f.line === lineNum);
+        if (funcOnLine) {
+          const tr = ARM_MMU.translate(funcOnLine.va);
+          TLB_UI.showWalk(tr);
+          TLB_UI.showPTE(tr.pte, tr.ap, tr.c, tr.b);
+          TLB_UI.render(-1, '');
+          UI.showWH(`Line ${lineNum}: ${funcOnLine.name}() at .text 0x${(funcOnLine.va>>>0).toString(16).toUpperCase().padStart(8,'0')}`);
+        }
+        const heapOnLine = Simulator.parsed.heap_ops.find(h => h.line === lineNum);
+        if (heapOnLine) {
+          if (heapOnLine.op !== 'free') {
+            const tr = ARM_MMU.translate(heapOnLine.va);
+            TLB_UI.showWalk(tr);
+            TLB_UI.showPTE(tr.pte, tr.ap, tr.c, tr.b);
+            TLB_UI.render(-1, '');
+          }
+          UI.showWH(`Line ${lineNum}: ${heapOnLine.op}(${heapOnLine.size||''}) — ${heapOnLine.var_name}`);
+        }
+      }
+    });
+  }
+};
+
+/* ═══ INITIALIZE ═══ */
+document.addEventListener('DOMContentLoaded', () => UI.init());
+</script>
+</body>
+</html>
